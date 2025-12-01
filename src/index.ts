@@ -19,17 +19,86 @@
  *   npx shai-hulud-scanner [directory]
  */
 
-const { execSync } = require('child_process')
-const crypto = require('crypto')
-const fs = require('fs')
-const https = require('https')
-const path = require('path')
+import { execSync } from 'child_process'
+import crypto from 'crypto'
+import fs from 'fs'
+import https from 'https'
+import path from 'path'
+
+// ============================================================================
+// Types and Interfaces
+// ============================================================================
+
+interface Config {
+  iocUrl: string
+  maliciousFileHashes: Record<string, string>
+  maliciousFileNames: string[]
+  suspiciousPatterns: RegExp[]
+  criticalDate: Date
+}
+
+interface CompromisedPackage {
+  package: string
+  version: string
+  location: string
+  severity: string
+  source?: string
+}
+
+interface MaliciousFile {
+  file: string
+  sha1: string
+  matched: string
+  severity: string
+}
+
+interface SuspiciousScript {
+  file: string
+  script: string
+  command: string
+  severity: string
+}
+
+interface GitHubMarker {
+  type: string
+  details?: string
+  file?: string
+  pattern?: string
+  path?: string
+  severity: string
+}
+
+interface Warning {
+  type: string
+  file: string
+  size: number
+  reason: string
+}
+
+interface ScanResults {
+  scannedPackages: number
+  compromisedPackages: CompromisedPackage[]
+  maliciousFiles: MaliciousFile[]
+  suspiciousScripts: SuspiciousScript[]
+  githubMarkers: GitHubMarker[]
+  warnings: Warning[]
+  startTime: number
+}
+
+interface IOCPackages {
+  [packageName: string]: string[]
+}
+
+interface FindFilesOptions {
+  maxDepth?: number
+  excludeNodeModules?: boolean
+}
 
 // ============================================================================
 // Configuration
 // ============================================================================
 
-const CONFIG = {
+const CONFIG: Config = {
   iocUrl: 'https://raw.githubusercontent.com/DataDog/indicators-of-compromise/main/shai-hulud-2.0/consolidated_iocs.csv',
   maliciousFileHashes: {
     // SHA-1 hashes of known malicious files
@@ -64,11 +133,11 @@ const colors = {
 }
 
 const log = {
-  info: msg => console.log(`${colors.blue}[INFO]${colors.reset} ${msg}`),
-  success: msg => console.log(`${colors.green}[✓]${colors.reset} ${msg}`),
-  warning: msg => console.log(`${colors.yellow}[⚠]${colors.reset} ${msg}`),
-  error: msg => console.log(`${colors.red}[✗]${colors.reset} ${msg}`),
-  header: (msg) => {
+  info: (msg: string) => console.log(`${colors.blue}[INFO]${colors.reset} ${msg}`),
+  success: (msg: string) => console.log(`${colors.green}[✓]${colors.reset} ${msg}`),
+  warning: (msg: string) => console.log(`${colors.yellow}[⚠]${colors.reset} ${msg}`),
+  error: (msg: string) => console.log(`${colors.red}[✗]${colors.reset} ${msg}`),
+  header: (msg: string) => {
     console.log('')
     console.log(`${colors.bold}${colors.cyan}${'═'.repeat(65)}${colors.reset}`)
     console.log(`${colors.bold}${colors.cyan}  ${msg}${colors.reset}`)
@@ -80,7 +149,7 @@ const log = {
 // Scanner Results
 // ============================================================================
 
-const results = {
+const results: ScanResults = {
   scannedPackages: 0,
   compromisedPackages: [],
   maliciousFiles: [],
@@ -114,19 +183,19 @@ function printBanner() {
 // IOC Management
 // ============================================================================
 
-async function downloadIOCs() {
+async function downloadIOCs(): Promise<IOCPackages> {
   log.header('Downloading Latest IOC List')
 
   return new Promise((resolve) => {
     https.get(CONFIG.iocUrl, (res) => {
       let data = ''
-      res.on('data', chunk => data += chunk)
+      res.on('data', (chunk: Buffer) => data += chunk)
       res.on('end', () => {
         const packages = parseIOCList(data)
         log.success(`Downloaded IOC list: ${Object.keys(packages).length} packages`)
         resolve(packages)
       })
-    }).on('error', (err) => {
+    }).on('error', (err: Error) => {
       log.warning(`Could not download IOC list: ${err.message}`)
       log.info('Using embedded IOC list')
       resolve(getEmbeddedIOCs())
@@ -134,8 +203,8 @@ async function downloadIOCs() {
   })
 }
 
-function parseIOCList(csvData) {
-  const packages = {}
+function parseIOCList(csvData: string): IOCPackages {
+  const packages: IOCPackages = {}
   const lines = csvData.split('\n')
 
   for (const line of lines) {
@@ -150,7 +219,7 @@ function parseIOCList(csvData) {
   return packages
 }
 
-function getEmbeddedIOCs() {
+function getEmbeddedIOCs(): IOCPackages {
   // Embedded list of top compromised packages
   return {
     '@accordproject/concerto-analysis': ['3.24.1'],
@@ -162,7 +231,7 @@ function getEmbeddedIOCs() {
 // Package Scanning
 // ============================================================================
 
-function scanNodeModules(scanDir, iocPackages) {
+function scanNodeModules(scanDir: string, iocPackages: IOCPackages): void {
   log.header('Scanning node_modules for Compromised Packages')
 
   const nodeModulesDirs = findDirectories(scanDir, 'node_modules')
@@ -187,7 +256,7 @@ function scanNodeModules(scanDir, iocPackages) {
           const installedVersion = pkgJson.version
 
           if (compromisedVersions.includes(installedVersion)) {
-            const finding = {
+            const finding: CompromisedPackage = {
               package: pkgName,
               version: installedVersion,
               location: pkgPath,
@@ -209,7 +278,7 @@ function scanNodeModules(scanDir, iocPackages) {
     log.success('No compromised packages found in node_modules')
 }
 
-function scanLockFiles(scanDir, iocPackages) {
+function scanLockFiles(scanDir: string, iocPackages: IOCPackages): void {
   log.header('Scanning Lock Files')
 
   const lockFiles = [
@@ -259,7 +328,7 @@ function scanLockFiles(scanDir, iocPackages) {
 // Malicious File Detection
 // ============================================================================
 
-function scanMaliciousFiles(scanDir) {
+function scanMaliciousFiles(scanDir: string): void {
   log.header('Scanning for Malicious Files')
 
   // Check for known malicious file names
@@ -268,7 +337,7 @@ function scanMaliciousFiles(scanDir) {
 
     for (const file of files) {
       const hash = calculateSHA1(file)
-      const finding = {
+      const finding: MaliciousFile = {
         file,
         sha1: hash,
         matched: CONFIG.maliciousFileHashes[hash] || 'Unknown variant',
@@ -315,7 +384,7 @@ function scanMaliciousFiles(scanDir) {
     log.success('No malicious files detected')
 }
 
-function scanSuspiciousScripts(scanDir) {
+function scanSuspiciousScripts(scanDir: string): void {
   log.header('Scanning for Suspicious Scripts')
 
   const packageJsonFiles = findFiles(scanDir, 'package.json', { excludeNodeModules: true })
@@ -338,12 +407,13 @@ function scanSuspiciousScripts(scanDir) {
             || CONFIG.suspiciousPatterns.some(p => p.test(script))
 
           if (isSuspicious) {
-            results.suspiciousScripts.push({
+            const finding: SuspiciousScript = {
               file: pkgFile,
               script: scriptName,
               command: script,
               severity: 'HIGH',
-            })
+            }
+            results.suspiciousScripts.push(finding)
             log.error(`Suspicious ${scriptName} script in: ${pkgFile}`)
             log.error(`  Command: ${script}`)
           }
@@ -363,7 +433,7 @@ function scanSuspiciousScripts(scanDir) {
 // GitHub Markers Detection
 // ============================================================================
 
-function scanGitHubMarkers(scanDir) {
+function scanGitHubMarkers(scanDir: string): void {
   log.header('Scanning for GitHub Infection Markers')
 
   const gitDir = path.join(scanDir, '.git')
@@ -378,11 +448,12 @@ function scanGitHubMarkers(scanDir) {
     const branches = execSync('git branch -a', { cwd: scanDir, encoding: 'utf8' })
 
     if (/shai-hulud/i.test(branches)) {
-      results.githubMarkers.push({
+      const marker: GitHubMarker = {
         type: 'suspicious_branch',
         details: 'Branch containing "shai-hulud" detected',
         severity: 'CRITICAL',
-      })
+      }
+      results.githubMarkers.push(marker)
       log.error('Suspicious branch "shai-hulud" detected!')
     }
   }
@@ -462,10 +533,10 @@ function scanGitHubMarkers(scanDir) {
 // Self-Hosted Runner Check
 // ============================================================================
 
-function scanRunners() {
+function scanRunners(): void {
   log.header('Checking for Malicious Self-Hosted Runners')
 
-  const homeDir = process.env.HOME || process.env.USERPROFILE
+  const homeDir = process.env.HOME || process.env.USERPROFILE || ''
   const suspiciousRunnerPaths = [
     path.join(homeDir, '.dev-env'),
     path.join(homeDir, '.github-runner'),
@@ -509,10 +580,10 @@ function scanRunners() {
 // Utility Functions
 // ============================================================================
 
-function findDirectories(baseDir, name) {
-  const dirs = []
+function findDirectories(baseDir: string, name: string): string[] {
+  const dirs: string[] = []
 
-  function walk(dir, depth = 0) {
+  function walk(dir: string, depth = 0): void {
     if (depth > 10)
       return // Prevent too deep recursion
 
@@ -537,11 +608,11 @@ function findDirectories(baseDir, name) {
   return dirs
 }
 
-function findFiles(baseDir, pattern, options = {}) {
-  const files = []
+function findFiles(baseDir: string, pattern: string, options: FindFilesOptions = {}): string[] {
+  const files: string[] = []
   const { maxDepth = 10, excludeNodeModules = false } = options
 
-  function walk(dir, depth = 0) {
+  function walk(dir: string, depth = 0): void {
     if (depth > maxDepth)
       return
 
@@ -578,7 +649,7 @@ function findFiles(baseDir, pattern, options = {}) {
   return files
 }
 
-function calculateSHA1(filePath) {
+function calculateSHA1(filePath: string): string {
   try {
     const content = fs.readFileSync(filePath)
     return crypto.createHash('sha1').update(content).digest('hex')
@@ -592,7 +663,7 @@ function calculateSHA1(filePath) {
 // Report Generation
 // ============================================================================
 
-function generateReport(scanDir) {
+function generateReport(scanDir: string): number {
   log.header('Scan Summary')
 
   const duration = ((Date.now() - results.startTime) / 1000).toFixed(2)
@@ -685,7 +756,7 @@ function generateReport(scanDir) {
 // Main Entry Point
 // ============================================================================
 
-async function main() {
+async function main(): Promise<void> {
   printBanner()
 
   const scanDir = process.argv[2] || process.cwd()
@@ -716,7 +787,7 @@ async function main() {
 }
 
 // Run main
-main().catch((err) => {
+main().catch((err: Error) => {
   log.error(`Scanner error: ${err.message}`)
   process.exit(1)
 })

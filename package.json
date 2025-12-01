@@ -1,6 +1,9 @@
 {
   "name": "shai-hulud-scanner",
   "private": true,
+  "scripts": {
+    "convert": "bun src/parse.ts"
+  },
   "devDependencies": {
     "@types/bun": "latest"
   },
