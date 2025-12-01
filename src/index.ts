@@ -219,11 +219,62 @@ function parseIOCList(csvData: string): IOCPackages {
   return packages
 }
 
+function autoRegenerateIOCs(): void {
+  // Get the directory where this file is located
+  const srcDir = path.dirname(new URL(import.meta.url).pathname)
+  const shaiTxtPath = path.join(srcDir, 'shai.txt')
+  const iocPackagesPath = path.join(srcDir, 'ioc-packages.ts')
+
+  // Check if shai.txt exists
+  if (!fs.existsSync(shaiTxtPath)) {
+    return // No source file, skip auto-regeneration
+  }
+
+  // Check if ioc-packages.ts exists or is outdated
+  let shouldRegenerate = false
+
+  if (!fs.existsSync(iocPackagesPath)) {
+    shouldRegenerate = true
+    log.info('IOC packages file not found, generating...')
+  }
+  else {
+    const shaiStats = fs.statSync(shaiTxtPath)
+    const iocStats = fs.statSync(iocPackagesPath)
+
+    if (shaiStats.mtime > iocStats.mtime) {
+      shouldRegenerate = true
+      log.info('shai.txt has been updated, regenerating IOC packages...')
+    }
+  }
+
+  if (shouldRegenerate) {
+    try {
+      const parsePath = path.join(srcDir, 'parse.ts')
+      execSync(`bun ${parsePath}`, {
+        cwd: srcDir,
+        stdio: 'inherit',
+      })
+      log.success('IOC packages regenerated successfully')
+    }
+    catch (e) {
+      log.warning('Failed to regenerate IOC packages, using existing data')
+    }
+  }
+}
+
 function getEmbeddedIOCs(): IOCPackages {
-  // Embedded list of top compromised packages
-  return {
-    '@accordproject/concerto-analysis': ['3.24.1'],
-    '@accordproject/concerto-linter': ['3.24.1'],
+  // Try to load from generated file first
+  try {
+    const { iocPackages } = require('./ioc-packages')
+    return iocPackages
+  }
+  catch {
+    // Fallback to minimal list if generated file doesn't exist
+    log.warning('IOC packages file not found, using minimal fallback list')
+    return {
+      '@accordproject/concerto-analysis': ['3.24.1'],
+      '@accordproject/concerto-linter': ['3.24.1'],
+    }
   }
 }
 
@@ -685,7 +736,14 @@ function generateReport(scanDir: string): number {
   console.log('')
 
   // Save JSON report
-  const reportPath = path.join(process.cwd(), `shai-hulud-report-${Date.now()}.json`)
+  const reportDir = path.join(process.cwd(), 'export-report')
+
+  // Create export-report directory if it doesn't exist
+  if (!fs.existsSync(reportDir)) {
+    fs.mkdirSync(reportDir, { recursive: true })
+  }
+
+  const reportPath = path.join(reportDir, `shai-hulud-report-${Date.now()}.json`)
   const report = {
     scanDate: new Date().toISOString(),
     scanDirectory: scanDir,
@@ -769,6 +827,9 @@ async function main(): Promise<void> {
   const absolutePath = path.resolve(scanDir)
   log.info(`Scanning directory: ${absolutePath}`)
   log.info(`Scan started at: ${new Date().toISOString()}`)
+
+  // Auto-regenerate IOC packages if shai.txt is updated
+  autoRegenerateIOCs()
 
   // Download IOCs
   const iocPackages = await downloadIOCs()

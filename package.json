@@ -2,6 +2,7 @@
   "name": "shai-hulud-scanner",
   "private": true,
   "scripts": {
+    "start": "bun src/index.ts",
     "convert": "bun src/parse.ts"
   },
   "devDependencies": {
